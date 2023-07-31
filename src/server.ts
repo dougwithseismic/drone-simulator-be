@@ -1,35 +1,32 @@
-// server.ts
-import express, { Request, Response, NextFunction } from 'express'
-import swaggerUi from 'swagger-ui-express'
+import { Server } from 'socket.io';
+import { World } from './models/world';
+import { createDrone, applyControlsToDrone } from './models/drone';
 
-import dotenv from 'dotenv'
-dotenv.config()
+const world = new World();
+const io = new Server();
 
-import middleware from '@/middleware'
-import routes from '@/routes'
-import swaggerDocs from '@/swagger'
-import logger from '@/middleware/logger'
+io.on('connection', (socket) => {
+    const droneId = socket.id; // or generate a unique ID
+    const drone = createDrone(droneId);
+    world.addDrone(drone);
 
-const app = express()
-const port = process.env.PORT || 5678
+    socket.on('droneControl', (controls) => {
+        const currentDrone = world.getDrones().find(d => d.id === droneId);
+        if (currentDrone) {
+            const updatedDrone = applyControlsToDrone(currentDrone, controls);
+            world.updateDrone(updatedDrone);
+        }
+    });
 
-app.use(middleware)
-app.use(routes)
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs))
+    socket.on('disconnect', () => {
+        world.removeDrone(droneId);
+    });
+});
 
-app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
-    console.error(err.stack)
-    res.status(500).send({ error: 'Something went wrong.' })
-})
+// Update physics for all drones at a fixed interval
+setInterval(() => {
+    world.updatePhysics();
 
-app.get('/', (req: Request, res: Response) => {
-    res.send('Hello from Express with Winston logging and Swagger documentation!')
-})
-
-app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
-    res.status(500).send('Internal Server Error')
-})
-
-app.listen(port, async () => {
-    logger.info(`Express server listening on port ${port}`)
-})
+    // Send updated world state to all clients
+    io.emit('worldUpdate', world.getDrones());
+}, 1000 / 60); // 60 times per second
